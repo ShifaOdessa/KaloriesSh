@@ -1,0 +1,6 @@
+{
+  "name": "Дневник Калорий",
+  "description": "Умное отслеживание калорий по фото блюда с использованием Google AI Gemini API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
