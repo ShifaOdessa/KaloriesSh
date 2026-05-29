@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalorieTrackerApp(viewModel: CalorieViewModel) {
+    val isSettingsLoaded by viewModel.isSettingsLoaded.collectAsStateWithLifecycle()
     val settingsState by viewModel.settings.collectAsStateWithLifecycle()
     val entriesState by viewModel.entries.collectAsStateWithLifecycle()
     val isAnalyzing by viewModel.isAnalyzing.collectAsStateWithLifecycle()
@@ -86,7 +87,7 @@ fun CalorieTrackerApp(viewModel: CalorieViewModel) {
                     .padding(innerPadding),
                 color = MaterialTheme.colorScheme.background
             ) {
-                if (settings == null) {
+                if (!isSettingsLoaded) {
                     // Loading DB
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -94,7 +95,7 @@ fun CalorieTrackerApp(viewModel: CalorieViewModel) {
                     ) {
                         CircularProgressIndicator()
                     }
-                } else if (settings.geminiApiKey.isNullOrBlank()) {
+                } else if (settings == null || settings.geminiApiKey.isNullOrBlank()) {
                     ApiKeyScreen(
                         onSave = { key -> viewModel.saveApiKey(key) }
                     )
