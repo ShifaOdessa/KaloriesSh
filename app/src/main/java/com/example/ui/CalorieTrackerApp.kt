@@ -55,6 +55,7 @@ import com.google.android.gms.common.api.ApiException
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalorieTrackerApp(viewModel: CalorieViewModel) {
+    val context = LocalContext.current
     val isSettingsLoaded by viewModel.isSettingsLoaded.collectAsStateWithLifecycle()
     val settingsState by viewModel.settings.collectAsStateWithLifecycle()
     val entriesState by viewModel.entries.collectAsStateWithLifecycle()
@@ -139,7 +140,17 @@ fun CalorieTrackerApp(viewModel: CalorieViewModel) {
                             viewModel.resetOnboarding()
                         },
                         onLogoutGoogle = {
-                            viewModel.logoutGoogle()
+                            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                                .requestEmail()
+                                .requestProfile()
+                                .build()
+                            try {
+                                GoogleSignIn.getClient(context, gso).signOut().addOnCompleteListener {
+                                    viewModel.logoutGoogle()
+                                }
+                            } catch (e: Exception) {
+                                viewModel.logoutGoogle()
+                            }
                         },
                         onSelectLanguage = {
                             viewModel.saveLanguage("")
@@ -1315,6 +1326,9 @@ fun GoogleLoginScreen(
     var showAccountSelector by remember { mutableStateOf(false) }
     var isSigningIn by remember { mutableStateOf(false) }
     val T = remember(languageCode) { Translations(languageCode) }
+    var manualName by remember { mutableStateOf("") }
+    var manualEmail by remember { mutableStateOf("") }
+    var inputError by remember { mutableStateOf<String?>(null) }
     
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -1471,6 +1485,119 @@ fun GoogleLoginScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = if (isSystemDark) Color.White else Color.Black
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // -- OR Divider --
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HorizontalDivider(
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = "  ${T.orLabel}  ",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                HorizontalDivider(
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // -- Manual Entry Card --
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSystemDark) Color(0xFF1D1B20) else Color.White
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = T.manualLoginTitle,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+
+                    OutlinedTextField(
+                        value = manualName,
+                        onValueChange = {
+                            manualName = it
+                            inputError = null
+                        },
+                        label = { Text(T.nameHintLabel) },
+                        placeholder = { Text(T.nameHint) },
+                        singleLine = true,
+                        leadingIcon = {
+                            Icon(Icons.Default.Person, contentDescription = null)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = manualEmail,
+                        onValueChange = {
+                            manualEmail = it
+                            inputError = null
+                        },
+                        label = { Text(T.emailLabel) },
+                        placeholder = { Text("example@email.com") },
+                        singleLine = true,
+                        leadingIcon = {
+                            Icon(Icons.Default.Email, contentDescription = null)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    if (inputError != null) {
+                        Text(
+                            text = inputError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            val trimmedName = manualName.trim()
+                            val trimmedEmail = manualEmail.trim()
+                            if (trimmedName.isBlank() || trimmedEmail.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(trimmedEmail).matches()) {
+                                inputError = T.manualEmailError
+                            } else {
+                                onSignInSuccess(trimmedEmail, trimmedName)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Login, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = T.loginButtonText,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 
@@ -2001,6 +2128,32 @@ class Translations(val lang: String) {
         "en" -> "Value starting with AIzaSy..."
         "uk" -> "Значення, що починається з AIzaSy..."
         else -> "Значение, начинающееся с AIzaSy..."
+    }
+
+    val orLabel = when(lang) {
+        "en" -> "or"
+        "uk" -> "або"
+        else -> "или"
+    }
+    val manualLoginTitle = when(lang) {
+        "en" -> "Enter details manually"
+        "uk" -> "Ввести дані вручну"
+        else -> "Ввести данные вручную"
+    }
+    val loginButtonText = when(lang) {
+        "en" -> "Enter Manually"
+        "uk" -> "Увійти вручну"
+        else -> "Войти вручную"
+    }
+    val emailLabel = when(lang) {
+        "en" -> "Email"
+        "uk" -> "Електронна пошта"
+        else -> "Электронная почта"
+    }
+    val manualEmailError = when(lang) {
+        "en" -> "Please enter a valid name and email address"
+        "uk" -> "Будь ласка, вкажіть коректне ім'я та електронну пошту"
+        else -> "Пожалуйста, введите корректное имя и элекроную почту"
     }
 }
 
