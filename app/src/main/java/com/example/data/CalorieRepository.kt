@@ -46,6 +46,43 @@ class CalorieRepository(private val db: AppDatabase) {
         )
     }
 
+    suspend fun saveLanguage(languageCode: String) {
+        val current = db.appSettingsDao().getSettingsDirect() ?: AppSettings()
+        db.appSettingsDao().insertSettings(
+            current.copy(languageCode = languageCode)
+        )
+    }
+
+    suspend fun saveGoogleLogin(email: String, name: String, profilePic: String? = null) {
+        val current = db.appSettingsDao().getSettingsDirect() ?: AppSettings()
+        db.appSettingsDao().insertSettings(
+            current.copy(
+                isGoogleLoggedIn = true,
+                googleEmail = email,
+                name = name,
+                googleProfilePic = profilePic
+            )
+        )
+    }
+
+    suspend fun logoutGoogle() {
+        val current = db.appSettingsDao().getSettingsDirect() ?: AppSettings()
+        db.appSettingsDao().insertSettings(
+            AppSettings(
+                id = 1,
+                themeMode = current.themeMode,
+                languageCode = current.languageCode,
+                isGoogleLoggedIn = false,
+                googleEmail = null,
+                name = "",
+                googleProfilePic = null,
+                isOnboarded = false,
+                geminiApiKey = null
+            )
+        )
+        db.calorieEntryDao().deleteAllEntries()
+    }
+
     suspend fun addEntry(foodName: String, calories: Int, photoBase64: String? = null) {
         db.calorieEntryDao().insertEntry(
             CalorieEntry(
@@ -58,6 +95,13 @@ class CalorieRepository(private val db: AppDatabase) {
 
     suspend fun resetDay() {
         db.calorieEntryDao().deleteAllEntries()
+    }
+
+    suspend fun resetOnboarding() {
+        val current = db.appSettingsDao().getSettingsDirect() ?: AppSettings()
+        db.appSettingsDao().insertSettings(
+            current.copy(isOnboarded = false)
+        )
     }
 
     suspend fun deleteEntry(id: Int) {

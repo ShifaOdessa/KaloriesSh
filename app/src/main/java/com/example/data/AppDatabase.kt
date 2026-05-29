@@ -24,7 +24,11 @@ data class AppSettings(
     val bmr: Int = 0,
     val dailyLimit: Int = 0,
     val isOnboarded: Boolean = false,
-    val themeMode: String = "SYSTEM"
+    val themeMode: String = "SYSTEM",
+    val isGoogleLoggedIn: Boolean = false,
+    val googleEmail: String? = null,
+    val googleProfilePic: String? = null,
+    val languageCode: String = ""
 )
 
 @Entity(tableName = "calorie_entries")

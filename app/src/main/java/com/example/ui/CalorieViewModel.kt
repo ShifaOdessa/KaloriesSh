@@ -62,6 +62,18 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
         _snackbarMessage.value = null
     }
 
+    fun saveLanguage(lang: String) {
+        viewModelScope.launch {
+            repository.saveLanguage(lang)
+            _snackbarMessage.value = when (lang) {
+                "en" -> "Language changed to English!"
+                "uk" -> "Мову змінено на українську!"
+                "ru" -> "Язык изменен на русский!"
+                else -> "Language updated"
+            }
+        }
+    }
+
     fun saveApiKey(key: String) {
         viewModelScope.launch {
             repository.saveApiKey(key.trim())
@@ -72,7 +84,35 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
     fun updateThemeMode(themeMode: String) {
         viewModelScope.launch {
             repository.saveThemeMode(themeMode)
-            _snackbarMessage.value = "Тема изменена!"
+            _snackbarMessage.value = when (settings.value?.languageCode) {
+                "en" -> "Theme changed!"
+                "uk" -> "Тему змінено!"
+                else -> "Тема изменена!"
+            }
+        }
+    }
+
+    fun loginWithGoogle(email: String, name: String, profilePic: String? = null) {
+        viewModelScope.launch {
+            repository.saveGoogleLogin(email, name, profilePic)
+            val lang = settings.value?.languageCode ?: "uk"
+            _snackbarMessage.value = when (lang) {
+                "en" -> "Successfully logged in with Google!"
+                "uk" -> "Успішний вхід через Google!"
+                else -> "Успешный вход через Google!"
+            }
+        }
+    }
+
+    fun logoutGoogle() {
+        viewModelScope.launch {
+            repository.logoutGoogle()
+            val lang = settings.value?.languageCode ?: "uk"
+            _snackbarMessage.value = when (lang) {
+                "en" -> "Logged out of Google account"
+                "uk" -> "Ви вийшли з аккаунта Google"
+                else -> "Вы вышли из аккаунта Google"
+            }
         }
     }
 
@@ -94,21 +134,42 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
                 bmr = bmr,
                 dailyLimit = limit
             )
-            _snackbarMessage.value = "Профиль успешно создан!"
+            val lang = settings.value?.languageCode ?: "uk"
+            _snackbarMessage.value = when (lang) {
+                "en" -> "Profile successfully created!"
+                "uk" -> "Профіль успішно створено!"
+                else -> "Профиль успешно создан!"
+            }
+        }
+    }
+
+    fun resetOnboarding() {
+        viewModelScope.launch {
+            repository.resetOnboarding()
         }
     }
 
     fun deleteEntry(id: Int) {
         viewModelScope.launch {
             repository.deleteEntry(id)
-            _snackbarMessage.value = "Запись удалена"
+            val lang = settings.value?.languageCode ?: "uk"
+            _snackbarMessage.value = when (lang) {
+                "en" -> "Entry deleted"
+                "uk" -> "Запис видалено"
+                else -> "Запись удалена"
+            }
         }
     }
 
     fun resetDay() {
         viewModelScope.launch {
             repository.resetDay()
-            _snackbarMessage.value = "Дневник очищен!"
+            val lang = settings.value?.languageCode ?: "uk"
+            _snackbarMessage.value = when (lang) {
+                "en" -> "Diary cleared!"
+                "uk" -> "Щоденник очищено!"
+                else -> "Дневник очищен!"
+            }
         }
     }
 
@@ -136,10 +197,19 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
             _analysisError.value = null
 
             val currentSettings = settings.value
-            val apiKey = currentSettings?.geminiApiKey
+            var apiKey = currentSettings?.geminiApiKey
+            val lang = currentSettings?.languageCode ?: "uk"
+
+            if (currentSettings?.isGoogleLoggedIn == true && apiKey.isNullOrBlank()) {
+                apiKey = com.example.BuildConfig.GEMINI_API_KEY
+            }
 
             if (apiKey.isNullOrBlank()) {
-                _analysisError.value = "API-ключ отсутствует. Перейдите в настройки и введите ключ."
+                _analysisError.value = when (lang) {
+                    "en" -> "API key is missing. Please sign in with Google."
+                    "uk" -> "API-ключ відсутній. Будь ласка, увійдіть через Google."
+                    else -> "API-ключ отсутствует. Пожалуйста, выполните вход через Google."
+                }
                 _isAnalyzing.value = false
                 return@launch
             }
@@ -149,7 +219,11 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
                 val base64Image = compressBitmapToBase64(bitmap)
 
                 // Build Gemini query
-                val prompt = "Ты - эксперт по питанию. Проанализируй фото еды и верни ответ СТРОГО в формате JSON без какого-либо дополнительного текста. Формат JSON: { \"food_name\": \"Определенное блюдо\", \"calories\": примерная_калорийность_в_ккал }. Если определить не удалось, верни error."
+                val prompt = when (lang) {
+                    "en" -> "You are a nutrition expert. Analyze the food photo and return the response STRICTLY in JSON format without any extra text. JSON format: { \"food_name\": \"Identified dish in English\", \"calories\": approximate_calories_in_kcal }. If it cannot be identified, return error."
+                    "uk" -> "Ти - експерт з харчування. Проаналізуй фото їжі та поверни відповідь СТРОГО у форматі JSON без будь-якого додаткового тексту. Формат JSON: { \"food_name\": \"Визначена страва українською мовою\", \"calories\": приблизна_калорійність_в_ккал }. Якщо визначити не вдалося, поверни error."
+                    else -> "Ты - эксперт по питанию. Проанализируй фото еды и верни ответ СТРОГО в формате JSON без какого-либо дополнительного текста. Формат JSON: { \"food_name\": \"Определенное блюдо на русском языке\", \"calories\": примерная_калорийность_в_ккал }. Если определить не удалось, верни error."
+                }
 
                 val request = GenerateContentRequest(
                     contents = listOf(
@@ -175,7 +249,11 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
                 val rawText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
 
                 if (rawText.isNullOrBlank()) {
-                    _analysisError.value = "Не удалось распознать еду. Попробуйте сделать более четкое фото."
+                    _analysisError.value = when (lang) {
+                        "en" -> "Failed to recognize food. Try taking a clearer photo."
+                        "uk" -> "Не вдалося розпізнати їжу. Спробуйте спробувати ще раз із чіткішим фото."
+                        else -> "Не удалось распознать еду. Попробуйте сделать более четкое фото."
+                    }
                 } else {
                     val cleanText = cleanJsonString(rawText)
                     val adapter = RetrofitClient.moshiInstance.adapter(FoodAnalysisResult::class.java)
@@ -186,7 +264,11 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
                     }
 
                     if (parsed == null || !parsed.error.isNullOrBlank() || parsed.foodName.isNullOrBlank() || parsed.calories == null) {
-                        _analysisError.value = "Не удалось распознать еду. Попробуйте сделать более четкое фото."
+                        _analysisError.value = when (lang) {
+                            "en" -> "Failed to recognize food. Try taking a clearer photo."
+                            "uk" -> "Не вдалося розпізнати їжу. Спробуйте спробувати ще раз із чіткішим фото."
+                            else -> "Не удалось распознать еду. Попробуйте сделать более четкое фото."
+                        }
                     } else {
                         // Success! Save the base64 thumbnail to show in history list
                         val compressedThumb = compressBitmapToThumbBase64(bitmap)
@@ -195,12 +277,20 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
                             calories = parsed.calories,
                             photoBase64 = compressedThumb
                         )
-                        _snackbarMessage.value = "Добавлено: ${parsed.foodName} (+${parsed.calories} ккал)"
+                        _snackbarMessage.value = when (lang) {
+                            "en" -> "Added: ${parsed.foodName} (+${parsed.calories} kcal)"
+                            "uk" -> "Додано: ${parsed.foodName} (+${parsed.calories} ккал)"
+                            else -> "Добавлено: ${parsed.foodName} (+${parsed.calories} ккал)"
+                        }
                     }
                 }
             } catch (e: Exception) {
                 Log.e("CalorieViewModel", "Gemini analysis failed", e)
-                _analysisError.value = "Ошибка при запросе к AI. Проверьте подключение к сети и валидность API-ключа."
+                _analysisError.value = when (lang) {
+                    "en" -> "AI request error. Please check network or API key."
+                    "uk" -> "Помилка при запиті до AI. Перевірте з'єднання або API-ключ."
+                    else -> "Ошибка при запросе к AI. Проверьте подключение к сети и валидность API-ключа."
+                }
             } finally {
                 _isAnalyzing.value = false
             }

@@ -1,6 +1,6 @@
 {
-  "name": "Дневник Калорий",
-  "description": "Умное отслеживание калорий по фото блюда с использованием Google AI Gemini API.",
+  "name": "Мій Раціон",
+  "description": "Умное определение и мониторинг калорийности блюд по фото на основе технологий Google Gemini API.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

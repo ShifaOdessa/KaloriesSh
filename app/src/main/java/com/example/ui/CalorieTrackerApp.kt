@@ -48,6 +48,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.CalorieEntry
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.launch
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,18 +98,30 @@ fun CalorieTrackerApp(viewModel: CalorieViewModel) {
                     ) {
                         CircularProgressIndicator()
                     }
-                } else if (settings == null || settings.geminiApiKey.isNullOrBlank()) {
-                    ApiKeyScreen(
-                        onSave = { key -> viewModel.saveApiKey(key) }
+                } else if (settings == null || settings.languageCode.isEmpty()) {
+                    LanguageSelectionScreen(
+                        onLanguageSelected = { lang ->
+                            viewModel.saveLanguage(lang)
+                        }
+                    )
+                } else if (!settings.isGoogleLoggedIn) {
+                    GoogleLoginScreen(
+                        languageCode = settings.languageCode,
+                        onSignInSuccess = { email, name ->
+                            viewModel.loginWithGoogle(email, name)
+                        }
                     )
                 } else if (!settings.isOnboarded) {
                     OnboardingScreen(
+                        languageCode = settings.languageCode,
+                        initialName = settings.name,
                         onCalculate = { name, age, height, weight, activity ->
                             viewModel.saveProfile(name, age, height, weight, activity)
                         }
                     )
                 } else {
                     MainTrackerScreen(
+                        languageCode = settings.languageCode,
                         userName = settings.name,
                         dailyLimit = settings.dailyLimit,
                         entries = entriesState,
@@ -119,18 +134,13 @@ fun CalorieTrackerApp(viewModel: CalorieViewModel) {
                         onReset = { viewModel.resetDay() },
                         onClearError = { viewModel.clearAnalysisError() },
                         onEditProfile = {
-                            // Allow user to reset onboarding state to re-onboard
-                            viewModel.saveProfile(
-                                settings.name,
-                                settings.age,
-                                settings.height,
-                                settings.weight,
-                                settings.activityLevel
-                            )
+                            viewModel.resetOnboarding()
                         },
-                        onChangeApiKey = {
-                            // Resets API key
-                            viewModel.saveApiKey("")
+                        onLogoutGoogle = {
+                            viewModel.logoutGoogle()
+                        },
+                        onSelectLanguage = {
+                            viewModel.saveLanguage("")
                         }
                     )
                 }
@@ -217,13 +227,16 @@ fun ApiKeyScreen(onSave: (String) -> Unit) {
 
 @Composable
 fun OnboardingScreen(
+    languageCode: String,
+    initialName: String = "",
     onCalculate: (String, Int, Double, Double, String) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(initialName) }
     var ageStr by remember { mutableStateOf("") }
     var heightStr by remember { mutableStateOf("") }
     var weightStr by remember { mutableStateOf("") }
     var selectedActivity by remember { mutableStateOf("Сидячая работа") }
+    val T = remember(languageCode) { Translations(languageCode) }
 
     val activityOptions = listOf("Сидячая работа", "Умеренная активность", "Средняя активность")
 
@@ -256,12 +269,12 @@ fun OnboardingScreen(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "Заполните профиль",
+                    text = T.onboardingTitle,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Эти данные необходимы для индивидуального расчета суточной нормы калорий",
+                    text = T.onboardingDesc,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -274,7 +287,7 @@ fun OnboardingScreen(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Ваше имя") },
+                    label = { Text(T.nameHint) },
                     singleLine = true,
                     leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                     modifier = Modifier
@@ -288,7 +301,7 @@ fun OnboardingScreen(
                 OutlinedTextField(
                     value = ageStr,
                     onValueChange = { ageStr = it },
-                    label = { Text("Возраст (лет)") },
+                    label = { Text(T.ageLabel) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     leadingIcon = { Icon(Icons.Default.CalendarToday, contentDescription = null) },
@@ -303,7 +316,7 @@ fun OnboardingScreen(
                 OutlinedTextField(
                     value = heightStr,
                     onValueChange = { heightStr = it },
-                    label = { Text("Рост (см)") },
+                    label = { Text(T.heightLabel) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     leadingIcon = { Icon(Icons.Default.Height, contentDescription = null) },
@@ -318,7 +331,7 @@ fun OnboardingScreen(
                 OutlinedTextField(
                     value = weightStr,
                     onValueChange = { weightStr = it },
-                    label = { Text("Вес (кг)") },
+                    label = { Text(T.weightLabel) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     leadingIcon = { Icon(Icons.Default.Scale, contentDescription = null) },
@@ -331,7 +344,7 @@ fun OnboardingScreen(
 
             item {
                 Text(
-                    text = "Уровень ежедневной активности:",
+                    text = T.activityLevelLabel,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
@@ -352,6 +365,29 @@ fun OnboardingScreen(
                     MaterialTheme.colorScheme.primary
                 } else {
                     Color.Transparent
+                }
+
+                val optionTitle = when (option) {
+                    "Сидячая работа" -> T.activityLow
+                    "Умеренная активность" -> T.activityMedium
+                    else -> T.activityHigh
+                }
+                val optionDesc = when (option) {
+                    "Сидячая работа" -> when (languageCode) {
+                        "en" -> "Sedentary lifestyle (x1.2)"
+                        "uk" -> "Малорухливий спосіб життя (x1.2)"
+                        else -> "Малоподвижный образ жизни (x1.2)"
+                    }
+                    "Умеренная активность" -> when (languageCode) {
+                        "en" -> "Walks, light workouts (x1.375)"
+                        "uk" -> "Прогулянки, легкі тренування (x1.375)"
+                        else -> "Прогулки, легкие тренировки (x1.375)"
+                    }
+                    else -> when (languageCode) {
+                        "en" -> "Regular sports, active work (x1.55)"
+                        "uk" -> "Регулярний спорт, активна робота (x1.55)"
+                        else -> "Регулярный спорт, тяжелая работа (x1.55)"
+                    }
                 }
 
                 Card(
@@ -382,16 +418,12 @@ fun OnboardingScreen(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
                             Text(
-                                text = option,
+                                text = optionTitle,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = when (option) {
-                                    "Сидячая работа" -> "Малоподвижный образ жизни (x1.2)"
-                                    "Умеренная активность" -> "Прогулки, легкие тренировки (x1.375)"
-                                    else -> "Регулярный спорт, тяжелая работа (x1.55)"
-                                },
+                                text = optionDesc,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -421,7 +453,7 @@ fun OnboardingScreen(
             shape = RoundedCornerShape(16.dp)
         ) {
             Text(
-                "Рассчитать и войти",
+                text = T.btnCalculate,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp
             )
@@ -432,6 +464,7 @@ fun OnboardingScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainTrackerScreen(
+    languageCode: String,
     userName: String,
     dailyLimit: Int,
     entries: List<CalorieEntry>,
@@ -444,11 +477,13 @@ fun MainTrackerScreen(
     onReset: () -> Unit,
     onClearError: () -> Unit,
     onEditProfile: () -> Unit,
-    onChangeApiKey: () -> Unit
+    onLogoutGoogle: () -> Unit,
+    onSelectLanguage: () -> Unit
 ) {
     val totalEaten = entries.sumOf { it.calories }
     val remaining = dailyLimit - totalEaten
     val isOverLimit = remaining < 0
+    val T = remember(languageCode) { Translations(languageCode) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
@@ -481,7 +516,7 @@ fun MainTrackerScreen(
             ) {
                 Column {
                     Text(
-                        text = "ДНЕВНИК ПИТАНИЯ",
+                        text = T.diaryLabel,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.5.sp,
@@ -491,7 +526,7 @@ fun MainTrackerScreen(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Привет, $userName! 👋",
+                        text = "${T.welcomeUser}, $userName! 👋",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Black,
                             fontSize = 24.sp,
@@ -552,7 +587,7 @@ fun MainTrackerScreen(
                             ) {
                                 Column {
                                     Text(
-                                        text = "Сегодня съедено",
+                                        text = T.eaten,
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = FontWeight.Medium,
                                             color = progressOnCardColor
@@ -571,7 +606,7 @@ fun MainTrackerScreen(
                                             )
                                         )
                                         Text(
-                                            text = "/ $dailyLimit ккал",
+                                            text = "/ $dailyLimit ${T.kcal}",
                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                 fontWeight = FontWeight.Medium,
                                                 color = progressOnCardColor.copy(alpha = 0.7f)
@@ -583,7 +618,7 @@ fun MainTrackerScreen(
                                     horizontalAlignment = Alignment.End
                                 ) {
                                     Text(
-                                        text = if (isOverLimit) "ПЕРЕБОР" else "ОСТАЛОСЬ",
+                                        text = if (isOverLimit) T.overLabel else T.remaining,
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontWeight = FontWeight.Bold,
                                             color = if (isOverLimit) MaterialTheme.colorScheme.error else progressOnCardColor.copy(alpha = 0.6f)
@@ -649,7 +684,7 @@ fun MainTrackerScreen(
                                 ) {
                                     Text("💡", fontSize = 16.sp)
                                     Text(
-                                        text = if (isOverLimit) "Внимание" else "Совет",
+                                        text = if (isOverLimit) T.warningTitle else T.tipTitle,
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onBackground
@@ -658,11 +693,7 @@ fun MainTrackerScreen(
                                 }
 
                                 Text(
-                                    text = if (isOverLimit) {
-                                        "Вы превысили лимит калорий. Рекомендуется пройти отработку, чтобы сжечь лишнее!"
-                                    } else {
-                                        "Вы в пределах нормы! Чтобы закрепить результат, выпейте стакан воды."
-                                    },
+                                    text = if (isOverLimit) T.tipMsgRed else T.tipMsgGreen,
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         fontSize = 11.sp,
                                         lineHeight = 14.sp,
@@ -689,7 +720,7 @@ fun MainTrackerScreen(
                                 verticalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = "ОТРАБОТКА",
+                                    text = T.workoutTitle,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.Bold,
                                         letterSpacing = 0.5.sp,
@@ -710,7 +741,7 @@ fun MainTrackerScreen(
                                     ) {
                                         Text("🏃", fontSize = 18.sp)
                                         Text(
-                                            text = "$steps шагов",
+                                            text = "$steps ${T.workoutSteps}",
                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                 fontWeight = FontWeight.Medium,
                                                 fontSize = 13.sp,
@@ -724,7 +755,7 @@ fun MainTrackerScreen(
                                     ) {
                                         Text("🏋️", fontSize = 18.sp)
                                         Text(
-                                            text = "$squats прис.",
+                                            text = "$squats ${T.workoutSquats}",
                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                 fontWeight = FontWeight.Medium,
                                                 fontSize = 13.sp,
@@ -748,7 +779,7 @@ fun MainTrackerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Сегодня вы съели:",
+                            text = T.eatenLabelHeader,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onBackground
@@ -764,7 +795,7 @@ fun MainTrackerScreen(
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Сброс")
+                                Text(T.resetLog)
                             }
                         }
                     }
@@ -796,12 +827,12 @@ fun MainTrackerScreen(
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = "Список пуст",
+                                    text = T.emptyHistoryHeader,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = "Сделайте фото еды, чтобы распознать ее и занести в дневник",
+                                    text = T.emptyHistorySub,
                                     textAlign = TextAlign.Center,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -853,7 +884,7 @@ fun MainTrackerScreen(
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Анализ еды по фото",
+                    text = T.cameraActionLabel,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp
                 )
@@ -864,13 +895,13 @@ fun MainTrackerScreen(
         if (showEditMenu) {
             AlertDialog(
                 onDismissRequest = { showEditMenu = false },
-                title = { Text("Настройки профиля") },
+                title = { Text(T.settingsTitle) },
                 text = {
                     Column(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "Выберите действие:",
+                            text = T.settingsSub,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Button(
@@ -882,23 +913,38 @@ fun MainTrackerScreen(
                         ) {
                             Icon(Icons.Default.Edit, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Редактировать лимиты")
+                            Text(T.editProfile)
+                        }
+                        Button(
+                            onClick = {
+                                showEditMenu = false
+                                onSelectLanguage()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Translate, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(T.changeLang)
                         }
                         OutlinedButton(
                             onClick = {
                                 showEditMenu = false
-                                onChangeApiKey()
+                                onLogoutGoogle()
                             },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.VpnKey, contentDescription = null)
+                            Icon(Icons.Default.ExitToApp, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Сбросить API-ключ")
+                            Text(T.logoutBtn)
                         }
 
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         Text(
-                            text = "Тема оформления:",
+                            text = T.themeLabel,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall
                         )
@@ -907,9 +953,9 @@ fun MainTrackerScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             val themesList = listOf(
-                                Triple("LIGHT", "Светлая", Icons.Default.WbSunny),
-                                Triple("DARK", "Темная", Icons.Default.NightsStay),
-                                Triple("SYSTEM", "Система", Icons.Default.Settings)
+                                Triple("LIGHT", T.themeLight, Icons.Default.WbSunny),
+                                Triple("DARK", T.themeDark, Icons.Default.NightsStay),
+                                Triple("SYSTEM", T.themeSystem, Icons.Default.Settings)
                             )
                             themesList.forEach { (mode, label, icon) ->
                                 val isSelected = currentTheme == mode
@@ -955,7 +1001,7 @@ fun MainTrackerScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = { showEditMenu = false }) {
-                        Text("Закрыть")
+                        Text(T.close)
                     }
                 }
             )
@@ -969,7 +1015,7 @@ fun MainTrackerScreen(
                     color = MaterialTheme.colorScheme.surface,
                     tonalElevation = 6.dp,
                     modifier = Modifier
-                        .size(220.dp)
+                        .size(240.dp)
                         .testTag("analyzing_dialog")
                 ) {
                     Column(
@@ -983,14 +1029,14 @@ fun MainTrackerScreen(
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Text(
-                            text = "Анализируем фото...",
+                            text = T.analyzerWorking,
                             fontWeight = FontWeight.SemiBold,
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.headlineSmall.copy(fontSize = 16.sp)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Определяем калорийность блюда с помощью Gemini AI",
+                            text = T.analyzerWorkingSub,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                             textAlign = TextAlign.Center
@@ -1014,7 +1060,7 @@ fun MainTrackerScreen(
                 },
                 title = {
                     Text(
-                        "Ошибка распознавания",
+                        text = T.recognitionErrorHeader,
                         textAlign = TextAlign.Center,
                         fontWeight = FontWeight.Bold
                     )
@@ -1033,7 +1079,7 @@ fun MainTrackerScreen(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text("Понятно")
+                        Text(T.okBtn)
                     }
                 }
             )
@@ -1155,7 +1201,7 @@ fun Base64Image(base64Str: String, modifier: Modifier = Modifier) {
     if (imageBitmap != null) {
         Image(
             bitmap = imageBitmap,
-            contentDescription = "Изображение еды",
+            contentDescription = "Food dish photo",
             modifier = modifier,
             contentScale = ContentScale.Crop
         )
@@ -1172,3 +1218,848 @@ fun Base64Image(base64Str: String, modifier: Modifier = Modifier) {
         }
     }
 }
+
+@Composable
+fun GoogleLoginScreen(
+    languageCode: String,
+    onSignInSuccess: (email: String, name: String) -> Unit
+) {
+    val context = LocalContext.current
+    var showAccountSelector by remember { mutableStateOf(false) }
+    var isSigningIn by remember { mutableStateOf(false) }
+    val T = remember(languageCode) { Translations(languageCode) }
+    
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            if (account != null && !account.email.isNullOrBlank()) {
+                onSignInSuccess(account.email ?: "", account.displayName ?: "User")
+            } else {
+                showAccountSelector = true
+            }
+        } catch (e: Exception) {
+            showAccountSelector = true
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        try {
+            val account = GoogleSignIn.getLastSignedInAccount(context)
+            if (account != null && !account.email.isNullOrBlank()) {
+                onSignInSuccess(account.email ?: "", account.displayName ?: "User")
+            }
+        } catch (e: Exception) {
+            // Ignored
+        }
+    }
+
+    val isSystemDark = isSystemInDarkTheme()
+    val backgroundBrush = if (isSystemDark) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF130B24),
+                Color(0xFF0C0714)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFF3EDF7),
+                Color(0xFFECE6F0)
+            )
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(backgroundBrush)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.tertiary
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Fastfood,
+                    contentDescription = "Calorie Tracker Logo",
+                    tint = Color.White,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Text(
+                text = "Мій Раціон",
+                fontWeight = FontWeight.Black,
+                style = MaterialTheme.typography.displaySmall,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+
+            Text(
+                text = "by Shifa",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Text(
+                text = T.welcomeSub,
+                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = T.welcomeDesc,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            Card(
+                onClick = {
+                    isSigningIn = true
+                    try {
+                        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                            .requestEmail()
+                            .requestProfile()
+                            .build()
+                        val googleSignInClient = GoogleSignIn.getClient(context, gso)
+                        googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                    } catch (e: Exception) {
+                        showAccountSelector = true
+                    }
+                },
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSystemDark) Color(0xFF1D1B20) else Color.White
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .testTag("google_login_button")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    GoogleColoredIcon(modifier = Modifier.size(24.dp))
+                    
+                    Spacer(modifier = Modifier.width(12.dp))
+                    
+                    Text(
+                        text = T.inviteGoogle,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (isSystemDark) Color.White else Color.Black
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = T.loginSafety,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                textAlign = TextAlign.Center
+            )
+        }
+
+        if (showAccountSelector) {
+            Dialog(onDismissRequest = {
+                showAccountSelector = false
+                isSigningIn = false
+            }) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .wrapContentHeight()
+                        .padding(16.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSystemDark) Color(0xFF2B2930) else Color(0xFFF3EDF7)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        GoogleColoredIcon(modifier = Modifier.size(36.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = T.selectAccount,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = T.selectAccountDesc,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 24.dp)
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable {
+                                    showAccountSelector = false
+                                    isSigningIn = false
+                                    onSignInSuccess("shifahome211@gmail.com", "Shifa Home")
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "S",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 18.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1.0f)) {
+                                Text(
+                                    text = "Shifa Home",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = "shifahome211@gmail.com",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable {
+                                    showAccountSelector = false
+                                    isSigningIn = false
+                                    onSignInSuccess("developer@example.com", "Android Developer")
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.secondary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "D",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 18.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1.0f)) {
+                                Text(
+                                    text = "Android Developer",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = "developer@example.com",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        TextButton(
+                            onClick = {
+                                showAccountSelector = false
+                                isSigningIn = false
+                            },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text(T.cancel)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GoogleColoredIcon(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color.White)
+            .border(1.dp, Color(0xFFE0E0E0), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+            val w = size.width
+            val h = size.height
+            
+            drawCircle(color = Color(0xFF4285F4), radius = w * 0.4f)
+            drawCircle(color = Color.White, radius = w * 0.25f)
+            
+            val strokeWidth = w * 0.15f
+            drawLine(
+                color = Color(0xFF4285F4),
+                start = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.5f),
+                end = androidx.compose.ui.geometry.Offset(w * 0.9f, h * 0.5f),
+                strokeWidth = strokeWidth
+            )
+        }
+        Text(
+            text = "G",
+            fontWeight = FontWeight.Black,
+            color = Color(0xFF4285F4),
+            fontSize = 12.sp
+        )
+    }
+}
+
+class Translations(val lang: String) {
+    val title = "Мій Раціон"
+    val subtitle = "by Shifa"
+
+    val inviteGoogle = when(lang) {
+        "en" -> "Sign in with Google"
+        "uk" -> "Увійти через Google"
+        else -> "Войти через Google"
+    }
+    val welcomeSub = when(lang) {
+        "en" -> "Smart Diet & Nutrition Diary"
+        "uk" -> "Розумний Раціон & Щоденник Харчування"
+        else -> "Умный Рацион & Дневник Питания"
+    }
+    val welcomeDesc = when(lang) {
+        "en" -> "Automatic calorie estimation from photos utilizing Google Gemini AI technology."
+        "uk" -> "Автоматичний розрахунок калорійності по фото за допомогою технології штучного інтелекту Google Gemini."
+        else -> "Автоматический расчет калорийности по фото с помощью технологии искусственного интеллекта Google Gemini."
+    }
+    val loginSafety = when(lang) {
+        "en" -> "Login is completely secure. We do not store your private passwords."
+        "uk" -> "Вхід абсолютно безпечний. Ми не зберігаємо ваші особисті паролі."
+        else -> "Вход абсолютно безопасен. Мы не храним ваши личные пароли."
+    }
+    val selectAccount = when(lang) {
+        "en" -> "Select Account"
+        "uk" -> "Оберіть акаунт"
+        else -> "Выберите аккаунт"
+    }
+    val selectAccountDesc = when(lang) {
+        "en" -> "to continue to \"Мій Раціон\""
+        "uk" -> "для переходу в додаток \"Мій Раціон\""
+        else -> "для перехода в приложение \"Мій Раціон\""
+    }
+    val cancel = when(lang) {
+        "en" -> "Cancel"
+        "uk" -> "Скасувати"
+        else -> "Отмена"
+    }
+    
+    // Onboarding
+    val selectGender = when(lang) {
+        "en" -> "Select Gender"
+        "uk" -> "Оберіть стать"
+        else -> "Выберите пол"
+    }
+    val onboardingTitle = when(lang) {
+        "en" -> "Tell us about yourself"
+        "uk" -> "Розкажіть про себе"
+        else -> "Расскажите о себе"
+    }
+    val onboardingDesc = when(lang) {
+        "en" -> "To calculate your daily calorie limit, please enter your details."
+        "uk" -> "Щоб розрахувати вашу денну норму калорій, будь ласка, введіть свої дані."
+        else -> "Чтобы рассчитать вашу суточную норму калорий, пожалуйста, введите свои данные."
+    }
+    val nameHint = when(lang) {
+        "en" -> "Your Name"
+        "uk" -> "Ваше Ім'я"
+        else -> "Ваше Имя"
+    }
+    val nameHintLabel = when(lang) {
+        "en" -> "Name"
+        "uk" -> "Ім'я"
+        else -> "Имя"
+    }
+    val ageLabel = when(lang) {
+        "en" -> "Age (years)"
+        "uk" -> "Вік (років)"
+        else -> "Возраст (лет)"
+    }
+    val heightLabel = when(lang) {
+        "en" -> "Height (cm)"
+        "uk" -> "Зріст (см)"
+        else -> "Рост (см)"
+    }
+    val weightLabel = when(lang) {
+        "en" -> "Weight (kg)"
+        "uk" -> "Вага (кг)"
+        else -> "Вес (кг)"
+    }
+    val activityLevelLabel = when(lang) {
+        "en" -> "Physical Activity"
+        "uk" -> "Фізична активність"
+        else -> "Физическая активность"
+    }
+    val selectActivityLabel = when(lang) {
+        "en" -> "Select Activity"
+        "uk" -> "Оберіть активність"
+        else -> "Выбрать активность"
+    }
+    val activityLow = when(lang) {
+        "en" -> "Sedentary Job"
+        "uk" -> "Сидяча робота"
+        else -> "Сидячая работа"
+    }
+    val activityMedium = when(lang) {
+        "en" -> "Moderate Activity"
+        "uk" -> "Помірна активність"
+        else -> "Умеренная активность"
+    }
+    val activityHigh = when(lang) {
+        "en" -> "Active / Sports"
+        "uk" -> "Середня активність"
+        else -> "Средняя активность"
+    }
+    val btnCalculate = when(lang) {
+        "en" -> "Calculate & Start"
+        "uk" -> "Розрахувати та Надіслати"
+        else -> "Рассчитать и начать"
+    }
+    val fillAllFieldsError = when(lang) {
+        "en" -> "Please correctly fill all fields!"
+        "uk" -> "Будь ласка, правильно заповніть усі поля!"
+        else -> "Пожалуйста, правильно заполните все поля!"
+    }
+
+    // Main Dashboard
+    val diaryLabel = when(lang) {
+        "en" -> "FOOD DIARY"
+        "uk" -> "ЩОДЕННИК ХАРЧУВАННЯ"
+        else -> "ДНЕВНИК ПИТАНИЯ"
+    }
+    val welcomeUser = when(lang) {
+        "en" -> "Hello"
+        "uk" -> "Привіт"
+        else -> "Привет"
+    }
+    val eaten = when(lang) {
+        "en" -> "Eaten today"
+        "uk" -> "Сьогодні з'їдено"
+        else -> "Сегодня съедено"
+    }
+    val limitLabel = when(lang) {
+        "en" -> "kcal limit"
+        "uk" -> "ккал ліміт"
+        else -> "ккал лимит"
+    }
+    val remaining = when(lang) {
+        "en" -> "REMAINING"
+        "uk" -> "ЗАЛИШИЛОСЬ"
+        else -> "ОСТАЛОСЬ"
+    }
+    val overLabel = when(lang) {
+        "en" -> "OVER LIMIT"
+        "uk" -> "ПЕРЕБОР"
+        else -> "ПЕРЕБОР"
+    }
+    val kcal = when(lang) {
+        "en" -> "kcal"
+        "uk" -> "ккал"
+        else -> "ккал"
+    }
+    val overLimit = when(lang) {
+        "en" -> "Over limit"
+        "uk" -> "Понад ліміт"
+        else -> "Превышение"
+    }
+    val mealHistory = when(lang) {
+        "en" -> "Meal History"
+        "uk" -> "Історія страв"
+        else -> "История блюд"
+    }
+    val eatenLabelHeader = when(lang) {
+        "en" -> "Today's meal entries:"
+        "uk" -> "Сьогодні ви з'їли:"
+        else -> "Сегодня вы съели:"
+    }
+    val emptyHistory = when(lang) {
+        "en" -> "No meals logged today yet. Use the camera tool to scan your dish!"
+        "uk" -> "Сьогодні ще немає доданих страв. Скористайтеся камєрою, щоб проаналізувати страву!"
+        else -> "Сегодня еще нет добавленных блюд. Воспользуйтесь камерой для сканирования блюда!"
+    }
+    val emptyHistorySub = when(lang) {
+        "en" -> "Take a food photo to detect it and log to your diary automatically"
+        "uk" -> "Зробіть фото їжі, щоб розпізнати її та занести до щоденника"
+        else -> "Сделайте фото еды, чтобы распознать ее и занести в дневник"
+    }
+    val emptyHistoryHeader = when(lang) {
+        "en" -> "List is empty"
+        "uk" -> "Список порожній"
+        else -> "Список пуст"
+    }
+    val addManual = when(lang) {
+        "en" -> "Add Manually"
+        "uk" -> "Додати вручну"
+        else -> "Добавить вручную"
+    }
+    val changeLang = when(lang) {
+        "en" -> "Change Language"
+        "uk" -> "Змінити мову"
+        else -> "Сменить язык"
+    }
+    val editProfile = when(lang) {
+        "en" -> "Edit Profile Limits"
+        "uk" -> "Редагувати ліміти"
+        else -> "Редактировать лимиты"
+    }
+    val delete = when(lang) {
+        "en" -> "Delete"
+        "uk" -> "Видати"
+        else -> "Удалить"
+    }
+    val settingsTitle = when(lang) {
+        "en" -> "Profile Settings"
+        "uk" -> "Налаштування профілю"
+        else -> "Настройки профиля"
+    }
+    val settingsSub = when(lang) {
+        "en" -> "Choose an action:"
+        "uk" -> "Оберіть дію:"
+        else -> "Выберите действие:"
+    }
+    val themeLabel = when(lang) {
+        "en" -> "Theme Mode:"
+        "uk" -> "Тема оформлення:"
+        else -> "Тема оформления:"
+    }
+    val themeSystem = when(lang) {
+        "en" -> "System"
+        "uk" -> "Система"
+        else -> "Система"
+    }
+    val themeLight = when(lang) {
+        "en" -> "Light"
+        "uk" -> "Світла"
+        else -> "Светлая"
+    }
+    val themeDark = when(lang) {
+        "en" -> "Dark"
+        "uk" -> "Темна"
+        else -> "Темная"
+    }
+    val logoutBtn = when(lang) {
+        "en" -> "Logout Google Account"
+        "uk" -> "Вийти з Google-акаунта"
+        else -> "Выйти из Google-аккаунта"
+    }
+    val resetLog = when(lang) {
+        "en" -> "Reset"
+        "uk" -> "Сброс"
+        else -> "Сброс"
+    }
+    val close = when(lang) {
+        "en" -> "Close"
+        "uk" -> "Закрити"
+        else -> "Закрыть"
+    }
+    val manualFoodName = when(lang) {
+        "en" -> "Food name / dish description"
+        "uk" -> "Назва страви / опис"
+        else -> "Название блюда / описание"
+    }
+    val manualCalories = when(lang) {
+        "en" -> "Calories (kcal)"
+        "uk" -> "Калорійність (ккал)"
+        else -> "Калорийность (ккал)"
+    }
+    val save = when(lang) {
+        "en" -> "Save"
+        "uk" -> "Зберегти"
+        else -> "Сохранить"
+    }
+    val editMealTitle = when(lang) {
+        "en" -> "Edit Meal / Add Meal"
+        "uk" -> "Додати страву"
+        else -> "Добавление блюда"
+    }
+    val analyzerWorking = when(lang) {
+        "en" -> "Analyzing food photo..."
+        "uk" -> "Аналізуємо фото..."
+        else -> "Анализируем фото..."
+    }
+    val analyzerWorkingSub = when(lang) {
+        "en" -> "Detecting calorie count of your meal with Google Gemini AI technology"
+        "uk" -> "Визначаємо калорійність страви за допомогою Gemini AI"
+        else -> "Определяем калорийность блюда с помощью Gemini AI"
+    }
+    val cameraActionLabel = when(lang) {
+        "en" -> "Analyze food by photo"
+        "uk" -> "Аналіз їжі по фото"
+        else -> "Анализ еды по фото"
+    }
+    val recognitionErrorHeader = when(lang) {
+        "en" -> "Recognition Failed"
+        "uk" -> "Помилка розпізнавання"
+        else -> "Ошибка распознавания"
+    }
+    val okBtn = when(lang) {
+        "en" -> "Got it"
+        "uk" -> "Зрозуміло"
+        else -> "Понятно"
+    }
+
+    // Tips and squates
+    val tipTitle = when(lang) {
+        "en" -> "Advice"
+        "uk" -> "Порада"
+        else -> "Совет"
+    }
+    val warningTitle = when(lang) {
+        "en" -> "Warning"
+        "uk" -> "Увага"
+        else -> "Внимание"
+    }
+    val tipMsgGreen = when(lang) {
+        "en" -> "You are within limits! To support digestion, drink a glass of water."
+        "uk" -> "Ви в межах норми! Щоб закріпити результат, випийте склянку води."
+        else -> "Вы в пределах нормы! Чтобы закрепить результат, выпейте стакан воды."
+    }
+    val tipMsgRed = when(lang) {
+        "en" -> "You overconsumed calories. We recommend quick exercises to burn off excesses!"
+        "uk" -> "Ви перевищили ліміт калорій. Рекомендується пройти відробку, щоб спалити зайве!"
+        else -> "Вы превысили лимит калорий. Рекомендуется пройти отработку, чтобы сжечь лишнее!"
+    }
+    val workoutTitle = when(lang) {
+        "en" -> "WORKOUT BURN"
+        "uk" -> "ВІДРОБКА"
+        else -> "ОТРАБОТКА"
+    }
+    val workoutSteps = when(lang) {
+        "en" -> "steps"
+        "uk" -> "кроків"
+        else -> "шагов"
+    }
+    val workoutSquats = when(lang) {
+        "en" -> "squats"
+        "uk" -> "прис."
+        else -> "прис."
+    }
+}
+
+@Composable
+fun LanguageSelectionScreen(onLanguageSelected: (String) -> Unit) {
+    val isSystemDark = isSystemInDarkTheme()
+    val backgroundBrush = if (isSystemDark) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF130B24),
+                Color(0xFF0C0714)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFF3EDF7),
+                Color(0xFFECE6F0)
+            )
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(backgroundBrush)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(90.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.tertiary
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Translate,
+                    contentDescription = "Language selection",
+                    tint = Color.White,
+                    modifier = Modifier.size(42.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "Мій Раціон",
+                fontWeight = FontWeight.Black,
+                style = MaterialTheme.typography.displaySmall,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+
+            Text(
+                text = "by Shifa",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 32.dp)
+            )
+
+            Text(
+                text = "Choose your language / Оберіть мову / Выберите язык",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 40.dp)
+            )
+
+            // Ukrainian Language button (Primary Option)
+            LanguageButton(
+                title = "Українська",
+                subtitle = "Мій Раціон",
+                flagEmoji = "🇺🇦",
+                onClick = { onLanguageSelected("uk") }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // English Language button
+            LanguageButton(
+                title = "English",
+                subtitle = "My Diet",
+                flagEmoji = "🇬🇧",
+                onClick = { onLanguageSelected("en") }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Russian Language button
+            LanguageButton(
+                title = "Русский",
+                subtitle = "Мой Рацион",
+                flagEmoji = "🇷🇺",
+                onClick = { onLanguageSelected("ru") }
+            )
+        }
+    }
+}
+
+@Composable
+fun LanguageButton(
+    title: String,
+    subtitle: String,
+    flagEmoji: String,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .testTag("lang_button_${title.lowercase()}")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = flagEmoji,
+                fontSize = 28.sp,
+                modifier = Modifier.padding(end = 16.dp)
+            )
+            Column(modifier = Modifier.weight(1.0f)) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.ArrowForwardIos,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
