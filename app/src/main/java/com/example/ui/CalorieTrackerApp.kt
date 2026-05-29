@@ -128,6 +128,8 @@ fun CalorieTrackerApp(viewModel: CalorieViewModel) {
                         isAnalyzing = isAnalyzing,
                         analysisError = analysisError,
                         currentTheme = currentTheme,
+                        currentApiKey = settings.geminiApiKey,
+                        onSaveApiKey = { key -> viewModel.saveApiKey(key) },
                         onChangeTheme = { newTheme -> viewModel.updateThemeMode(newTheme) },
                         onAnalyzeFood = { bitmap -> viewModel.analyzeAndAddFood(bitmap) },
                         onDeleteEntry = { id -> viewModel.deleteEntry(id) },
@@ -471,6 +473,8 @@ fun MainTrackerScreen(
     isAnalyzing: Boolean,
     analysisError: String?,
     currentTheme: String,
+    currentApiKey: String?,
+    onSaveApiKey: (String) -> Unit,
     onChangeTheme: (String) -> Unit,
     onAnalyzeFood: (Bitmap) -> Unit,
     onDeleteEntry: (Int) -> Unit,
@@ -494,6 +498,7 @@ fun MainTrackerScreen(
     }
 
     var showEditMenu by remember { mutableStateOf(false) }
+    var showApiKeyFieldDialog by remember { mutableStateOf(false) }
 
     val isCurrentlyDark = currentTheme == "DARK" || (currentTheme == "SYSTEM" && isSystemInDarkTheme())
     val bentoBg = if (isCurrentlyDark) Color(0xFF0F0D13) else Color(0xFFFDF8FD)
@@ -926,6 +931,21 @@ fun MainTrackerScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(T.changeLang)
                         }
+                        Button(
+                            onClick = {
+                                showEditMenu = false
+                                showApiKeyFieldDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSecondary
+                            )
+                        ) {
+                            Icon(Icons.Default.VpnKey, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(T.geminiApiKeyLabel)
+                        }
                         OutlinedButton(
                             onClick = {
                                 showEditMenu = false
@@ -1002,6 +1022,73 @@ fun MainTrackerScreen(
                 confirmButton = {
                     TextButton(onClick = { showEditMenu = false }) {
                         Text(T.close)
+                    }
+                }
+            )
+        }
+
+        if (showApiKeyFieldDialog) {
+            var tempKey by remember { mutableStateOf(currentApiKey ?: "") }
+            var keyVisible by remember { mutableStateOf(false) }
+
+            AlertDialog(
+                onDismissRequest = { showApiKeyFieldDialog = false },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VpnKey,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(T.geminiApiKeyLabel)
+                    }
+                },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = T.geminiApiKeyDesc,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = tempKey,
+                            onValueChange = { tempKey = it },
+                            placeholder = { Text(text = T.geminiApiKeyHint) },
+                            singleLine = true,
+                            visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                val visibilityIcon = if (keyVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
+                                IconButton(onClick = { keyVisible = !keyVisible }) {
+                                    Icon(imageVector = visibilityIcon, contentDescription = "Toggle visibility")
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("apiKeyInput"),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onSaveApiKey(tempKey)
+                            showApiKeyFieldDialog = false
+                        }
+                    ) {
+                        Text(T.save)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showApiKeyFieldDialog = false }) {
+                        Text(T.cancel)
                     }
                 }
             )
@@ -1898,6 +1985,22 @@ class Translations(val lang: String) {
         "en" -> "squats"
         "uk" -> "прис."
         else -> "прис."
+    }
+
+    val geminiApiKeyLabel = when(lang) {
+        "en" -> "Gemini API Key"
+        "uk" -> "API-ключ Gemini"
+        else -> "API-ключ Gemini"
+    }
+    val geminiApiKeyDesc = when(lang) {
+        "en" -> "Enter your custom Google Gemini API key to use the intelligence without local limits. It is stored securely on your device."
+        "uk" -> "Введіть власний API-ключ Google Gemini для користування штучним інтелектом без обмежень. Він надійно зберігається на пристрої."
+        else -> "Введите собственный API-ключ Google Gemini для использования искусственного интеллекта без лимитов. Он надежно сохраняется на устройстве."
+    }
+    val geminiApiKeyHint = when(lang) {
+        "en" -> "Value starting with AIzaSy..."
+        "uk" -> "Значення, що починається з AIzaSy..."
+        else -> "Значение, начинающееся с AIzaSy..."
     }
 }
 

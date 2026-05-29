@@ -77,7 +77,12 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
     fun saveApiKey(key: String) {
         viewModelScope.launch {
             repository.saveApiKey(key.trim())
-            _snackbarMessage.value = "API-ключ сохранен!"
+            val lang = settings.value?.languageCode ?: "uk"
+            _snackbarMessage.value = when (lang) {
+                "en" -> "API Key saved successfully!"
+                "uk" -> "API-ключ успішно збережено!"
+                else -> "API-ключ успешно сохранен!"
+            }
         }
     }
 
@@ -206,9 +211,9 @@ class CalorieViewModel(private val repository: CalorieRepository) : ViewModel() 
 
             if (apiKey.isNullOrBlank()) {
                 _analysisError.value = when (lang) {
-                    "en" -> "API key is missing. Please sign in with Google."
-                    "uk" -> "API-ключ відсутній. Будь ласка, увійдіть через Google."
-                    else -> "API-ключ отсутствует. Пожалуйста, выполните вход через Google."
+                    "en" -> "API key is missing. Please enter your Gemini API key in Settings."
+                    "uk" -> "API-ключ відсутній. Будь ласка, вкажіть ваш API-ключ Gemini у Налаштуваннях."
+                    else -> "API-ключ отсутствует. Пожалуйста, введите ваш API-ключ Gemini в Настройках."
                 }
                 _isAnalyzing.value = false
                 return@launch
