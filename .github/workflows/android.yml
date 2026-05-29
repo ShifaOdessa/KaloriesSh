@@ -28,6 +28,14 @@ jobs:
           gradle wrapper --gradle-version 9.3.1 --distribution-type bin
           chmod +x gradlew
 
+      - name: Decode Keystore
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          else
+            echo "Warning: debug.keystore.base64 not found to decode!"
+          fi
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
